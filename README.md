@@ -1,4 +1,113 @@
-# 🚀 LinkedIn Sourcing Agent - Synapse Challenge
+# 🔍 LinkedIn Sourcing Agent 
+
+An AI-powered sourcing assistant that autonomously discovers, scores, and contacts candidates from LinkedIn based on job descriptions — built to scale with intelligent automation and modern web architecture.
+
+---
+
+## 🌟 Overview
+This project is designed for the Talent Torch to demonstrate the power of AI-driven sourcing. It performs the full recruitment cycle:
+
+- Parses job descriptions
+- Extracts top-matching candidates from LinkedIn
+- Scores candidates using a detailed fit rubric
+- Generates personalized outreach messages
+- Provides a responsive web UI for interaction
+
+---
+
+## ⚙️ Features
+
+### ✅ Core Functionality
+- **🔍 LinkedIn Profile Discovery:** Automatically searches and extracts candidate profiles.
+- **🧠 Fit Score Algorithm:** Scores candidates based on education, company history, skills, location, and tenure.
+- **💬 Personalized Outreach:** Tailored messages crafted by GPT-4 for each candidate.
+- **📦 Batch Job Support:** Handles multiple job descriptions concurrently via a task queue.
+
+### 🔁 Bonus Features
+- **🌐 Multi-Source Enrichment:** Integrates GitHub, Twitter, and personal websites.
+- **🚀 Parallel Processing:** Uses Celery to run 10+ jobs in parallel.
+- **🧮 Confidence Estimation:** Displays confidence for incomplete/inferable data.
+- **💾 Smart Caching:** Avoids redundant requests using Redis.
+- **🖥️ Web UI:** Interactive interface for job upload, candidate review, and outreach control.
+
+---
+
+## 🏗️ System Architecture
+
+```mermaid
+flowchart TD
+    A[Job Description] --> B[LinkedIn Scraper (via RapidAPI/Selenium)]
+    B --> C[Candidate Data Parser]
+    C --> D[Fit Score Calculation]
+    D --> E[Outreach Message Generation (GPT-4)]
+    E --> F[Web Interface (FastAPI + Tailwind)]
+```
+
+---
+
+## 🚀 Getting Started
+
+### 1. Clone & Install
+```bash
+git clone https://github.com/your-repo/linkedin-sourcing-agent.git
+cd linkedin-sourcing-agent
+pip install -r requirements.txt
+```
+
+### 2. Setup Environment
+```bash
+cp .env.example .env
+# Add your OpenAI & RapidAPI keys, DB configs, etc. to the .env file
+```
+
+### 3. Launch the Application
+```bash
+uvicorn main:app --reload
+```
+Visit [http://localhost:8000](http://localhost:8000) to access the interface.
+
+---
+
+## 🧠 Fit Score Rubric
+
+| Category            | Weight | Description                              |
+|---------------------|--------|------------------------------------------|
+| 🎓 Education        | 20%    | Prestige of institutions and relevance   |
+| 📈 Career Trajectory| 20%    | Growth trends, promotion history         |
+| 🏢 Company Relevance| 15%    | Current and past company alignment       |
+| 🔧 Skill Match      | 25%    | Tech stack, role responsibilities        |
+| 📍 Location Match   | 10%    | Proximity or remote compatibility        |
+| 📆 Tenure           | 10%    | Stability vs. job hopping                |
+
+---
+
+## 💻 Tech Stack
+
+- **Backend:** FastAPI (Python)
+- **LLM:** OpenAI GPT-4 for outreach generation
+- **Web Scraping:** Selenium, BeautifulSoup, RapidAPI
+- **Database:** PostgreSQL + SQLAlchemy ORM
+- **Queue & Cache:** Celery + Redis
+- **Frontend:** Tailwind CSS + HTML + JS
+
+---
+
+## 💡 Example Usage (Programmatic)
+
+```python
+from agent import LinkedInSourcingAgent
+
+agent = LinkedInSourcingAgent()
+job_description = "Senior Backend Engineer - Python, AWS, FastAPI"
+
+candidates = agent.search_linkedin(job_description)
+scored = agent.score_candidates(candidates, job_description)
+messages = agent.generate_outreach(scored[:5], job_description)
+```
+
+## 📄 License
+MIT License – Free to use, modify, and build upon.
+
 
 An autonomous AI agent that sources LinkedIn profiles at scale, scores candidates using a sophisticated fit score algorithm, and generates personalized outreach messages.
 

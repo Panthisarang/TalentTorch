@@ -458,8 +458,11 @@ class LinkedInScraper:
     
     def extract_profile_data(self, linkedin_url: str) -> Dict[str, Any]:
         """
-        Scrape public LinkedIn profile data using requests and BeautifulSoup.
+        Robustly scrape public LinkedIn profile data using requests and BeautifulSoup.
+        Tries multiple selectors, logs missing fields, and adds warnings for incomplete data.
         """
+        import re
+        import datetime
         cache_key = f"profile_data:{hash(linkedin_url)}"
         cached_data = db_manager.get_cache(cache_key)
         if cached_data:
@@ -480,55 +483,141 @@ class LinkedInScraper:
             "skills": [],
             "github_url": "",
             "twitter_url": "",
-            "personal_website": ""
+            "personal_website": "",
+            "warnings": [],
+            "extraction_timestamp": datetime.datetime.now().isoformat()
         }
         try:
             resp = self.session.get(linkedin_url, headers=headers, timeout=20)
             if resp.status_code != 200:
-                raise Exception(f"Failed to fetch profile: {resp.status_code}")
+                logger.warning(f"Failed to fetch profile: {linkedin_url} (status {resp.status_code})")
+                profile_data['warnings'].append(f"HTTP status {resp.status_code}")
+                return profile_data
             soup = BeautifulSoup(resp.text, 'html.parser')
-            # Name
+
+            # Name (try multiple selectors)
+            name = ""
+            # 1. Standard h1
             name_tag = soup.find('h1')
-            if name_tag:
-                profile_data["name"] = name_tag.get_text(strip=True)
-            # Headline
+            if name_tag and name_tag.get_text(strip=True):
+                name = name_tag.get_text(strip=True)
+            # 2. aria-label
+            if not name:
+                name_aria = soup.find(attrs={"aria-label": re.compile(r"^.+\s+\|\s+LinkedIn$")})
+                if name_aria:
+                    name = name_aria.get("aria-label", "").split("|")[0].strip()
+            # 3. meta property
+            if not name:
+                meta_name = soup.find('meta', property='og:title')
+                if meta_name and meta_name.get('content'):
+                    name = meta_name['content'].split('|')[0].strip()
+            profile_data["name"] = name
+            if not name:
+                logger.warning(f"Name not found for {linkedin_url}")
+                profile_data['warnings'].append("Name not found")
+
+            # Headline (try multiple selectors)
+            headline = ""
             headline_tag = soup.find('div', class_=lambda x: x and 'text-body-medium' in x)
             if headline_tag:
-                profile_data["headline"] = headline_tag.get_text(strip=True)
-            # Location
+                headline = headline_tag.get_text(strip=True)
+            if not headline:
+                # Try meta description
+                meta_desc = soup.find('meta', attrs={'name': 'description'})
+                if meta_desc and meta_desc.get('content'):
+                    headline = meta_desc['content'].split('|')[0].strip()
+            profile_data["headline"] = headline
+            if not headline:
+                logger.info(f"Headline not found for {linkedin_url}")
+                profile_data['warnings'].append("Headline not found")
+
+            # Location (try multiple selectors)
+            location = ""
             loc_tag = soup.find('span', class_=lambda x: x and 'text-body-small' in x)
             if loc_tag:
-                profile_data["location"] = loc_tag.get_text(strip=True)
-            # Experience (simple)
+                location = loc_tag.get_text(strip=True)
+            if not location:
+                loc_alt = soup.find('span', string=re.compile(r'\b[A-Z][a-z]+,? [A-Z]{2,}'))
+                if loc_alt:
+                    location = loc_alt.get_text(strip=True)
+            profile_data["location"] = location
+            if not location:
+                logger.info(f"Location not found for {linkedin_url}")
+                profile_data['warnings'].append("Location not found")
+
+            # Experience (try to extract both simple and detailed)
+            experience = []
             exp_section = soup.find('section', {'id': 'experience'})
             if exp_section:
                 jobs = exp_section.find_all('li')
                 for job in jobs:
-                    title = job.find('span', {'class': 'mr1'})
-                    company = job.find('span', {'class': 't-14'})
+                    title = ""
+                    company = ""
+                    # Try multiple selectors for title/company
+                    title_tag = job.find('span', {'class': 'mr1'}) or job.find('span', {'class': 't-bold'})
+                    company_tag = job.find('span', {'class': 't-14'}) or job.find('span', {'class': 't-normal'})
+                    if title_tag:
+                        title = title_tag.get_text(strip=True)
+                    if company_tag:
+                        company = company_tag.get_text(strip=True)
                     if title or company:
-                        profile_data['experience'].append({
-                            'title': title.get_text(strip=True) if title else '',
-                            'company': company.get_text(strip=True) if company else ''
+                        experience.append({
+                            'title': title,
+                            'company': company
                         })
-            # Education (simple)
+            else:
+                # Fallback: look for any job block with role/company
+                for job_block in soup.find_all('li'):
+                    if 'experience' in (job_block.get('id') or ''):
+                        title = job_block.find('span', {'class': 'mr1'})
+                        company = job_block.find('span', {'class': 't-14'})
+                        if title or company:
+                            experience.append({
+                                'title': title.get_text(strip=True) if title else '',
+                                'company': company.get_text(strip=True) if company else ''
+                            })
+            profile_data['experience'] = experience
+            if not experience:
+                logger.info(f"Experience not found for {linkedin_url}")
+                profile_data['warnings'].append("Experience not found")
+
+            # Education (try to extract both simple and detailed)
+            education = []
             edu_section = soup.find('section', {'id': 'education'})
             if edu_section:
                 schools = edu_section.find_all('li')
                 for school in schools:
-                    school_name = school.find('span', {'class': 'mr1'})
-                    degree = school.find('span', {'class': 't-14'})
+                    school_name = school.find('span', {'class': 'mr1'}) or school.find('span', {'class': 't-bold'})
+                    degree = school.find('span', {'class': 't-14'}) or school.find('span', {'class': 't-normal'})
                     if school_name or degree:
-                        profile_data['education'].append({
+                        education.append({
                             'school': school_name.get_text(strip=True) if school_name else '',
                             'degree': degree.get_text(strip=True) if degree else ''
                         })
+            profile_data['education'] = education
+            if not education:
+                logger.info(f"Education not found for {linkedin_url}")
+                profile_data['warnings'].append("Education not found")
+
             # Skills (public profiles rarely show, but attempt)
+            skills = []
             skills_section = soup.find('section', {'id': 'skills'})
             if skills_section:
                 skills = [s.get_text(strip=True) for s in skills_section.find_all('span', {'class': 'mr1'})]
-                profile_data['skills'] = skills
-            # Social links (try to extract from summary/about)
+            # Fallback: look for keywords in meta
+            if not skills:
+                meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
+                if meta_keywords and meta_keywords.get('content'):
+                    skills = [k.strip() for k in meta_keywords['content'].split(',') if k.strip()]
+            profile_data['skills'] = skills
+            if not skills:
+                logger.info(f"Skills not found for {linkedin_url}")
+                profile_data['warnings'].append("Skills not found")
+
+            # Social links (try to extract from summary/about and contact info)
+            github_url = ""
+            twitter_url = ""
+            personal_website = ""
             about_section = soup.find('section', {'id': 'about'})
             if about_section:
                 about_text = about_section.get_text()
@@ -536,15 +625,47 @@ class LinkedInScraper:
                 twitter_match = re.search(r"https?://twitter.com/\w+", about_text)
                 web_match = re.search(r"https?://[\w.-]+\.[a-z]{2,}", about_text)
                 if github_match:
-                    profile_data['github_url'] = github_match.group(0)
+                    github_url = github_match.group(0)
                 if twitter_match:
-                    profile_data['twitter_url'] = twitter_match.group(0)
-                if web_match and not github_match and not twitter_match:
-                    profile_data['personal_website'] = web_match.group(0)
+                    twitter_url = twitter_match.group(0)
+                if web_match and not github_url and not twitter_url:
+                    personal_website = web_match.group(0)
+            # Fallback: look for links in contact info
+            contact_section = soup.find('section', {'id': 'contact-info'})
+            if contact_section:
+                links = contact_section.find_all('a', href=True)
+                for link in links:
+                    href = link['href']
+                    if 'github.com' in href:
+                        github_url = href
+                    elif 'twitter.com' in href:
+                        twitter_url = href
+                    elif href.startswith('http') and not github_url and not twitter_url:
+                        personal_website = href
+            profile_data['github_url'] = github_url
+            profile_data['twitter_url'] = twitter_url
+            profile_data['personal_website'] = personal_website
+
+            # Current company (try to infer from experience or headline)
+            current_company = ""
+            if experience:
+                current_company = experience[0].get('company', '')
+            if not current_company and headline:
+                # Try to extract company from headline: "Title at Company"
+                if ' at ' in headline:
+                    current_company = headline.split(' at ')[-1].strip()
+            profile_data['current_company'] = current_company
+            if not current_company:
+                logger.info(f"Current company not found for {linkedin_url}")
+                profile_data['warnings'].append("Current company not found")
+
+            # Final validation: do NOT skip or flag incomplete profiles
+            # Always return whatever is extracted, even if name/headline is missing
             db_manager.set_cache(cache_key, profile_data)
             return profile_data
         except Exception as e:
-            print(f"Profile extraction failed for {linkedin_url}: {e}")
+            logger.error(f"Profile extraction failed for {linkedin_url}: {e}")
+            profile_data['warnings'].append(f"Extraction error: {e}")
             return profile_data
 
     def _extract_public_id(self, url: str) -> Optional[str]:
