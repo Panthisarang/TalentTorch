@@ -94,47 +94,166 @@ async def get_candidates(request: BatchJobRequest):
     return output
 
 # --- Helper functions ---
+import random
+
 def score_profile_for_job(profile_data, job):
-    # Example scoring logic, can be replaced with your fit algorithm
+    """
+    Fit Score Rubric (Simplified):
+    - Education (20%)
+    - Career Trajectory (20%)
+    - Company Relevance (15%)
+    - Experience Match (25%)
+    - Location Match (10%)
+    - Tenure (10%)
+    Each category is scored 0-10, then weighted.
+    """
+    import random
     score = 0
     breakdown = {}
-    # Education
-    elite = [school for school in (profile_data.get("education") or []) if any(e in school.get("school", "") for e in settings.elite_schools)]
-    breakdown["education"] = 10.0 if elite else 5.0
-    score += breakdown["education"] * settings.education_weight
-    # Trajectory (years of experience)
-    exp = len(profile_data.get("experience") or [])
-    breakdown["trajectory"] = min(10.0, exp)
-    score += breakdown["trajectory"] * settings.trajectory_weight
-    # Company (match to job company)
-    breakdown["company"] = 10.0 if job.company.lower() in (profile_data.get("current_company", "").lower()) else 6.0
-    score += breakdown["company"] * settings.company_weight
-    # Skills
+
+    # --- Education (20%) ---
+    # Elite schools (MIT, Stanford, etc.): 9-10
+    # Strong schools: 7-8
+    # Standard universities: 5-6
+    # Clear progression: 8-10
+    elite_schools = set(s.lower() for s in getattr(settings, "elite_schools", []))
+    strong_schools = set(s.lower() for s in getattr(settings, "strong_schools", [])) if hasattr(settings, "strong_schools") else set()
+    educations = profile_data.get("education") or []
+    edu_score = 0
+    if educations:
+        for edu in educations:
+            school = (edu.get("school") or "").lower()
+            if any(es in school for es in elite_schools):
+                edu_score = max(edu_score, 10)
+            elif any(ss in school for ss in strong_schools):
+                edu_score = max(edu_score, 8)
+            elif school:
+                edu_score = max(edu_score, 6)
+        # Progression: more than 1 degree or increasing degree level
+        if len(educations) > 1:
+            edu_score = max(edu_score, 8)
+    breakdown["education"] = edu_score if edu_score else 2
+    score += breakdown["education"] * 0.20
+
+    # --- Career Trajectory (20%) ---
+    # Steady growth: 6-8, Limited progression: 3-5
+    experience = profile_data.get("experience") or []
+    trajectory_score = 0
+    if experience:
+        # Steady growth: increasing responsibility or title
+        titles = [e.get("title", "").lower() for e in experience if e.get("title")]
+        if len(titles) >= 2 and any("lead" in t or "manager" in t or "head" in t for t in titles):
+            trajectory_score = 8
+        elif len(titles) >= 2:
+            trajectory_score = 6
+        else:
+            trajectory_score = 4
+    breakdown["trajectory"] = trajectory_score if trajectory_score else 3
+    score += breakdown["trajectory"] * 0.20
+
+    # --- Company Relevance (15%) ---
+    # Top tech companies: 9-10, Relevant industry: 7-8, Any experience: 5-6
+    top_companies = set(s.lower() for s in getattr(settings, "top_companies", [])) if hasattr(settings, "top_companies") else set()
+    relevant_industries = set(s.lower() for s in getattr(settings, "relevant_industries", [])) if hasattr(settings, "relevant_industries") else set()
+    cand_company = (profile_data.get("current_company") or "").lower()
+    company_score = 0
+    if cand_company:
+        if any(tc in cand_company for tc in top_companies):
+            company_score = 10
+        elif any(ri in cand_company for ri in relevant_industries):
+            company_score = 8
+        else:
+            company_score = 6
+    elif experience:
+        companies = [e.get("company", "").lower() for e in experience if e.get("company")]
+        if any(tc in c for tc in top_companies for c in companies):
+            company_score = 9
+        elif any(ri in c for ri in relevant_industries for c in companies):
+            company_score = 7
+        elif companies:
+            company_score = 5
+    breakdown["company"] = company_score if company_score else 3
+    score += breakdown["company"] * 0.15
+
+    # --- Experience Match (25%) ---
+    # Perfect skill match: 9-10, Strong overlap: 7-8, Some: 5-6
     job_skills = set([s.lower() for s in job.requirements if len(s) < 30])
     cand_skills = set([s.lower() for s in profile_data.get("skills", [])])
-    match = len(job_skills & cand_skills)
-    breakdown["skills"] = min(10.0, 5.0 + match * 2.0)
-    score += breakdown["skills"] * settings.skills_weight
-    # Location
-    breakdown["location"] = 10.0 if job.location.lower() in (profile_data.get("location", "").lower()) else 5.0
-    score += breakdown["location"] * settings.location_weight
-    # Tenure
-    tenure = 0
-    for exp in (profile_data.get("experience") or []):
-        if exp.get("company", "").lower() == job.company.lower():
-            tenure += 1
-    breakdown["tenure"] = min(10.0, tenure)
-    score += breakdown["tenure"] * settings.tenure_weight
-    # Normalize
+    overlap = job_skills & cand_skills
+    if len(overlap) >= max(len(job_skills), 3):
+        exp_score = 10
+    elif len(overlap) >= 2:
+        exp_score = 8
+    elif len(overlap) == 1:
+        exp_score = 6
+    else:
+        exp_score = 3
+    breakdown["experience_match"] = exp_score
+    score += exp_score * 0.25
+
+    # --- Location Match (10%) ---
+    # Exact city: 10, Same metro: 8, Remote-friendly: 6
+    cand_location = (profile_data.get("location") or "").lower()
+    job_location = (job.location or "").lower()
+    location_score = 2
+    if job_location and job_location in cand_location:
+        location_score = 10
+    elif job_location and any(part in cand_location for part in job_location.split()):
+        location_score = 8
+    elif "remote" in cand_location or "remote" in job_location:
+        location_score = 6
+    breakdown["location"] = location_score
+    score += location_score * 0.10
+
+    # --- Tenure (10%) ---
+    # 2-3 years avg: 9-10, 1-2 years: 6-8, Job hopping: 3-5
+    tenure_years = 0
+    companies = {}
+    for exp in experience:
+        company = exp.get("company", "")
+        if company:
+            companies.setdefault(company, 0)
+            companies[company] += 1
+    avg_tenure = (sum(companies.values()) / len(companies)) if companies else 0
+    if avg_tenure >= 2:
+        tenure_score = 10
+    elif avg_tenure >= 1:
+        tenure_score = 7
+    elif avg_tenure > 0:
+        tenure_score = 4
+    else:
+        tenure_score = 2
+    breakdown["tenure"] = tenure_score
+    score += tenure_score * 0.10
+
+    # Add mild randomness to break ties
+    score += random.uniform(0, 1)
     score = round(score, 2)
     for k in breakdown:
         breakdown[k] = round(breakdown[k], 1)
     return score, breakdown
 
+
 def generate_outreach_message(profile_data, job):
-    # Simple example, can be replaced with GPT
-    name = profile_data.get("name", "there")
-    return f"Hi {name}, I noticed your background in {job.title} and wanted to connect about an opportunity at {job.company}."
+    """
+    Personalized outreach: includes name, job title, company, and, if available, a top skill or experience.
+    Always generates a message, even for incomplete profiles.
+    """
+    name = profile_data.get("name") or "there"
+    # Try to highlight a relevant skill or experience
+    skills = profile_data.get("skills") or []
+    experience = profile_data.get("experience") or []
+    highlight = ""
+    if skills:
+        highlight = f" I was impressed by your skill in {skills[0]}."
+    elif experience:
+        first_exp = experience[0]
+        if first_exp.get("title"):
+            highlight = f" Your experience as {first_exp['title']} stood out."
+    return (
+        f"Hi {name}, I came across your profile while searching for talented professionals in {job.title}."
+        f" We're looking for someone like you at {job.company}.{highlight} If you're open to new opportunities, I'd love to connect!"
+    )
 
 
 async def batch_process_jobs(jobs: List[JobInput], top_n: int):
